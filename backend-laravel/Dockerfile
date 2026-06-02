@@ -41,8 +41,6 @@ COPY . .
 # Compilar assets
 RUN npm run build
 
-RUN php artisan package:discover --ansi
-
 # Permisos de storage
 RUN mkdir -p storage/logs \
     storage/framework/cache \
@@ -51,6 +49,8 @@ RUN mkdir -p storage/logs \
     bootstrap/cache \
     && chmod -R 775 storage bootstrap/cache \
     && chown -R www-data:www-data storage bootstrap/cache
+
+RUN php artisan package:discover --ansi
 
 # Redirigir el error log principal de nginx a stderr
 RUN sed -i 's|error_log /var/log/nginx/error.log warn;|error_log /dev/stderr warn;|' /etc/nginx/nginx.conf || true
