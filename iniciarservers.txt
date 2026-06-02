@@ -1,0 +1,15 @@
+## Iniciar Servicios
+```bash
+# Terminal 1: Laravel
+cd backend-laravel
+php artisan serve
+
+# Terminal 2: Vite
+cd backend-laravel
+npm run dev
+
+# Terminal 3: Python
+cd backend-python
+.\venv\Scripts\activate
+python run.py
+```
