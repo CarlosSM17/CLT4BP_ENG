@@ -15,7 +15,9 @@ class InstructionalMaterial extends Model
         'is_active',
         'timer_seconds',
         'activated_at',
-        'deactivated_at'
+        'deactivated_at',
+        'generation_status',
+        'generation_error',
     ];
 
     protected $casts = [
