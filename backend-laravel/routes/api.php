@@ -208,6 +208,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Instructor routes
         Route::post('/generate', [MaterialController::class, 'generate']);
+        Route::get('/{materialId}/generation-status', [MaterialController::class, 'generationStatus']);
         Route::get('/', [MaterialController::class, 'listMaterials']);
         Route::get('/{materialId}', [MaterialController::class, 'getMaterial']);
         Route::post('/{materialId}/toggle-active', [MaterialController::class, 'toggleActive']);
