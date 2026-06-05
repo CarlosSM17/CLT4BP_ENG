@@ -74,40 +74,67 @@ class MaterialController extends Controller
                 'additional_context' => $validated['additional_context'] ?? null
             ];
 
-            // Generate material with AI
-            Log::info('Generating instructional material', [
-                'course_id' => $courseId,
-                'material_type' => $validated['material_type']
-            ]);
-
-            $result = $this->aiService->generateMaterial($aiRequest);
-
-            // Save material to DB (deactivated by default)
+            // Create a pending record immediately so the HTTP response can return fast.
+            // The actual AI call runs after the response is sent via afterResponse().
             $material = InstructionalMaterial::create([
                 'course_id' => $courseId,
                 'material_type' => $validated['material_type'],
                 'target_type' => $validated['profile_type'],
                 'target_student_id' => $validated['student_id'] ?? null,
-                'content' => $result['content'],
+                'content' => null,
                 'is_active' => false,
-                'timer_seconds' => $this->getDefaultTimer($validated['material_type'])
+                'timer_seconds' => $this->getDefaultTimer($validated['material_type']),
+                'generation_status' => 'pending',
             ]);
 
-            Log::info('Material saved successfully', [
-                'material_id' => $material->id
+            Log::info('Material generation queued', [
+                'material_id' => $material->id,
+                'material_type' => $validated['material_type']
             ]);
+
+            $aiService = $this->aiService;
+            $materialId = $material->id;
+
+            // Runs after the HTTP response is sent (PHP-FPM fastcgi_finish_request).
+            // This avoids the Railway 30-second HTTP gateway timeout for long AI calls.
+            dispatch(function () use ($materialId, $aiRequest, $aiService) {
+                $material = InstructionalMaterial::find($materialId);
+                if (!$material) return;
+
+                try {
+                    $material->update(['generation_status' => 'processing']);
+                    $result = $aiService->generateMaterial($aiRequest);
+                    $material->update([
+                        'content' => $result['content'],
+                        'generation_status' => 'completed',
+                    ]);
+                    Log::info('Material generated successfully', [
+                        'material_id' => $materialId,
+                        'tokens_used' => $result['token_usage']['total_tokens'] ?? 0
+                    ]);
+                } catch (\Exception $e) {
+                    $material->update([
+                        'generation_status' => 'failed',
+                        'generation_error' => $e->getMessage(),
+                    ]);
+                    Log::error('Material generation failed', [
+                        'material_id' => $materialId,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            })->afterResponse();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Material generated successfully',
+                'message' => 'Material generation started',
                 'data' => [
-                    'material' => $material,
-                    'token_usage' => $result['token_usage'] ?? null
+                    'material_id' => $material->id,
+                    'status' => 'pending',
                 ]
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Error generating material', [
+            Log::error('Error initiating material generation', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
@@ -117,6 +144,33 @@ class MaterialController extends Controller
                 'message' => 'Error generating material: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Poll the generation status of a material
+     */
+    public function generationStatus(Request $request, int $courseId, int $materialId)
+    {
+        $this->authorize('manage', Course::findOrFail($courseId));
+
+        $material = InstructionalMaterial::where('course_id', $courseId)
+            ->findOrFail($materialId);
+
+        $data = [
+            'material_id' => $material->id,
+            'status' => $material->generation_status,
+        ];
+
+        if ($material->generation_status === 'completed') {
+            $data['material'] = $material;
+        } elseif ($material->generation_status === 'failed') {
+            $data['error'] = $material->generation_error;
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+        ]);
     }
 
     private function formatLearningObjectives(Course $course): array
@@ -177,6 +231,7 @@ class MaterialController extends Controller
         $this->authorize('manage', Course::findOrFail($courseId));
 
         $materials = InstructionalMaterial::where('course_id', $courseId)
+            ->where('generation_status', 'completed')
             ->orderBy('created_at', 'desc')
             ->get();
 
