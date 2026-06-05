@@ -139,7 +139,9 @@
                   <svg v-else xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
-                  {{ generating ? 'Generating with AI...' : 'Generate Material' }}
+                  {{ generating
+                    ? (generationStatus === 'processing' ? 'Processing with AI...' : 'Starting generation...')
+                    : 'Generate Material' }}
                 </button>
               </div>
             </div>
@@ -317,7 +319,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import AppLayout from '../../components/layout/AppLayout.vue';
 import { useCltEffectsStore } from '../../stores/cltEffects';
@@ -330,6 +332,8 @@ const courseId = computed(() => parseInt(route.params.courseId));
 const loading = ref(true);
 const loadingMaterials = ref(false);
 const generating = ref(false);
+const generationStatus = ref(''); // 'pending' | 'processing' | 'completed' | 'failed'
+let pollInterval = null;
 
 const cltSelection = ref(null);
 const students = ref([]);
@@ -401,14 +405,49 @@ const generateMaterial = async () => {
   if (!canGenerate.value) return;
   try {
     generating.value = true;
+    generationStatus.value = 'pending';
     const response = await api.post(`/courses/${courseId.value}/materials/generate`, materialConfig.value);
-    generatedMaterial.value = response.data.data;
-    await loadMaterials();
+    const { material_id, status } = response.data.data;
+
+    if (status === 'pending') {
+      startPolling(material_id);
+    }
   } catch (error) {
     console.error('Error generating material:', error);
-    alert('Error generating material: ' + (error.response?.data?.message || error.message));
-  } finally {
     generating.value = false;
+    generationStatus.value = '';
+    alert('Error generating material: ' + (error.response?.data?.message || error.message));
+  }
+};
+
+const startPolling = (materialId) => {
+  stopPolling();
+  pollInterval = setInterval(async () => {
+    try {
+      const res = await api.get(`/courses/${courseId.value}/materials/${materialId}/generation-status`);
+      const { status, material, error } = res.data.data;
+      generationStatus.value = status;
+
+      if (status === 'completed') {
+        stopPolling();
+        generating.value = false;
+        generatedMaterial.value = { material, token_usage: material?.token_usage };
+        await loadMaterials();
+      } else if (status === 'failed') {
+        stopPolling();
+        generating.value = false;
+        alert('Error generating material: ' + (error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error('Error polling generation status:', err);
+    }
+  }, 3000);
+};
+
+const stopPolling = () => {
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
   }
 };
 
@@ -421,6 +460,8 @@ const resetForm = () => {
     additional_context: ''
   };
   generatedMaterial.value = null;
+  generationStatus.value = '';
+  stopPolling();
 };
 
 const viewMaterial = (material) => {
@@ -507,5 +548,9 @@ const loadData = async () => {
 
 onMounted(() => {
   loadData();
+});
+
+onUnmounted(() => {
+  stopPolling();
 });
 </script>
